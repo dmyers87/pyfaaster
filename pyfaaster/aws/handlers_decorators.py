@@ -2,6 +2,7 @@
 # Copyright (c) 2016-present, CloudZero, Inc. All rights reserved.
 # Licensed under the BSD-style license. See LICENSE file in the project root for full license information.
 
+import functools
 import re
 import os
 
@@ -226,11 +227,20 @@ def apig_response(handler):
         handler (func): a lambda handler function that whose result is APIGateway compatible.
     """
     def handler_wrapper(event, context, **kwargs):
-        res = handler(event, context, **kwargs)
-        return {
-            'statusCode': res.get('statusCode') or 200,
-            'body': json.dumps(res['body'] if 'body' in res else res),
-        }
+        try:
+            res = handler(event, context, **kwargs)
+            res_is_dict = isinstance(res, dict)
+            return {
+                'headers': res.get('headers', {}) if res_is_dict else {},
+                'statusCode': res.get('statusCode', 200) if res_is_dict else 200,
+                'body': json.dumps(res['body'] if 'body' in res else res),
+            }
+        except Exception as err:
+            logger.exception(err)
+            return {
+                'statusCode': 500,
+                'body': f'Failed to {handler.__name__.replace("_", " ")}',
+            }
 
     return handler_wrapper
 
@@ -292,19 +302,23 @@ def configuration_aware(config_file, create=False):
             try:
                 logger.debug('Loading CONFIG')
                 conn = conf.conn(kwargs['ENCRYPT_KEY_ARN'])
-                configuration = conf.load(conn, kwargs['CONFIG'], config_file)
+                conf.load(conn, kwargs['CONFIG'], config_file)
             except Exception as error:
                 logger.debug('Could not load CONFIG')
                 if create:
                     logger.debug('... but can try to create!')
                     try:
-                        configuration = conf.save(conn, kwargs['CONFIG'], config_file, {})
+                        conf.save(conn, kwargs['CONFIG'], config_file, {})
                         logger.debug('Created empty CONFIG')
                     except Exception as error:
                         return {'statusCode': 503, 'body': f"Could not create configuration file ({error})"}
                 else:
                     return {'statusCode': 503, 'body': f"Could not read configuration file ({error})"}
-            kwargs['configuration'] = configuration
+            kwargs['configuration'] = {
+                'load': functools.partial(conf.load, conn, kwargs['CONFIG'], config_file),
+                'save': functools.partial(conf.save, conn, kwargs['CONFIG'], config_file),
+
+            }
             return handler(event, context, **kwargs)
         return handler_wrapper
     return configuration_handler
