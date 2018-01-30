@@ -257,13 +257,16 @@ def test_http_response_with_status_code():
 
 @pytest.mark.unit
 def test_http_response_with_complex_body():
-    # When going to/from JSON, we lose some type information
-    actual_event = {'a': 1, 'b': {'m', 'n', 'o'}, 'c': {'z': 0}, 'd': [1, '2', True]}
-    expected_event = {'a': 1, 'b': ['m', 'n', 'o'], 'c': {'z': 0}, 'd': [1, '2', True]}
-    handler = decs.http_response(lambda e, c, **kwargs: {'statusCode': 200, 'body': actual_event})
-    response = handler(actual_event, None)
+    input_event = {'a': 1, 'b': {'m', 'n', 'o'}, 'c': {'z': 0}, 'd': [1, '2', True]}
+    handler = decs.http_response(lambda e, c, **kwargs: {'statusCode': 200, 'body': input_event})
+    response = handler(input_event, None)
+    expected_output = {'a': 1, 'b': ['m', 'n', 'o'], 'c': {'z': 0}, 'd': [1, '2', True]}
+    actual_output = json.loads(response['body'])
+
+    # set conversions are not stable
+    actual_output['b'] = sorted(actual_output['b'])
+    assert actual_output == expected_output
     assert response['statusCode'] == 200
-    assert json.loads(response['body']) == expected_event
 
 
 @pytest.mark.unit
