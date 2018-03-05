@@ -53,7 +53,7 @@ def identity_handler(event, context, configuration=None, **kwargs):
 
 @pytest.mark.unit
 def test_environ_aware_named_kwargs(context):
-    @decs.environ_aware(['NAMESPACE'], [])
+    @decs.environ_aware(required=['NAMESPACE'], optional=[])
     def handler(e, c, NAMESPACE=None):
         assert NAMESPACE == utils.deep_get(context, 'os', 'environ', 'NAMESPACE')
 
@@ -63,10 +63,11 @@ def test_environ_aware_named_kwargs(context):
 @pytest.mark.unit
 def test_environ_aware_opts():
     event = {}
-    handler = decs.environ_aware([], ['NAMESPACE', 'FOO'])(identity_handler)
+    handler = decs.environ_aware(required=[], optional=['NAMESPACE', 'FOO'])(identity_handler)
 
     response = handler(event, None)
-    assert utils.deep_get(response, 'body', 'kwargs', 'NAMESPACE') == utils.deep_get(context, 'os', 'environ', 'NAMESPACE')
+    assert utils.deep_get(response, 'body', 'kwargs', 'NAMESPACE') == utils.deep_get(
+        context, 'os', 'environ', 'NAMESPACE')
     assert not utils.deep_get(response, 'body', 'kwargs', 'FOO')
 
 
@@ -101,7 +102,8 @@ def test_namespace_aware(context):
     handler = decs.namespace_aware(identity_handler)
 
     response = handler(event, None)
-    assert utils.deep_get(response, 'body', 'kwargs', 'NAMESPACE') == utils.deep_get(context, 'os', 'environ', 'NAMESPACE')
+    assert utils.deep_get(response, 'body', 'kwargs', 'NAMESPACE') == utils.deep_get(
+        context, 'os', 'environ', 'NAMESPACE')
 
 
 @pytest.mark.unit
@@ -163,30 +165,95 @@ def test_cors_origin_bad():
 
 @pytest.mark.unit
 def test_parameters():
-    params = {'a': 1, 'b': 2}
-    event = {'queryStringParameters': params}
-    handler = decs.parameters(*params.keys())(identity_handler)
+    required_qs_params = {'a': 1, 'b': 2}
+    optional_qs_params = {'c': 1, 'd': 2}
+    all_qs_params = dict()
+    all_qs_params.update(**required_qs_params, **optional_qs_params)
+    path_params = {'e': 1, 'f': 2}
+    event = {
+        'queryStringParameters': all_qs_params,
+        'pathParameters': path_params,
+    }
+    handler = decs.parameters(required_querystring=required_qs_params.keys(),
+                              optional_querystring=optional_qs_params.keys(),
+                              path=path_params.keys()
+                              )(identity_handler)
 
     response = handler(event, None)
     response_kwargs = utils.deep_get(response, 'body', 'kwargs')
-    assert all([k in response_kwargs for k in params])
+
+    expected_params = dict()
+    expected_params.update(**all_qs_params, **path_params)
+    assert all([response_kwargs.get(ek) and response_kwargs[ek] == ev for ek, ev in (expected_params.items())])
 
 
 @pytest.mark.unit
-def test_parameters_bad():
-    params = {'a': 1, 'b': 2}
-    event = {'queryStringParameters': {}}
-    handler = decs.parameters(*params.keys())(identity_handler)
+def test_parameters_missing_required_querystring():
+    required_qs_params = {'a': 1, 'b': 2}
+    optional_qs_params = {'c': 1, 'd': 2}
+    path_params = {'e': 1, 'f': 2}
+    event = {
+        'queryStringParameters': optional_qs_params,
+        'pathParameters': path_params,
+    }
+    handler = decs.parameters(required_querystring=required_qs_params.keys(),
+                              optional_querystring=optional_qs_params.keys(),
+                              path=path_params.keys()
+                              )(identity_handler)
 
     response = handler(event, None)
     assert response.get('statusCode') == 400
+    assert 'Invalid' in response.get('body')
+
+
+@pytest.mark.unit
+def test_parameters_missing_optional_querystring():
+    required_qs_params = {'a': 1, 'b': 2}
+    optional_qs_params = {'c': 1, 'd': 2}
+    path_params = {'e': 1, 'f': 2}
+    event = {
+        'queryStringParameters': required_qs_params,
+        'pathParameters': path_params,
+    }
+    handler = decs.parameters(required_querystring=required_qs_params.keys(),
+                              optional_querystring=optional_qs_params.keys(),
+                              path=path_params.keys()
+                              )(identity_handler)
+
+    response = handler(event, None)
+    response_kwargs = utils.deep_get(response, 'body', 'kwargs')
+
+    expected_params = dict()
+    expected_params.update(**required_qs_params, **path_params)
+    assert all([response_kwargs.get(ek) and response_kwargs[ek] == ev for ek, ev in (expected_params.items())])
+
+
+@pytest.mark.unit
+def test_parameters_missing_path():
+    required_qs_params = {'a': 1, 'b': 2}
+    optional_qs_params = {'c': 1, 'd': 2}
+    path_params = {'e': 1, 'f': 2}
+    all_qs_params = dict()
+    all_qs_params.update(**required_qs_params, **optional_qs_params)
+    event = {
+        'queryStringParameters': all_qs_params,
+        'pathParameters': {},
+    }
+    handler = decs.parameters(required_querystring=required_qs_params.keys(),
+                              optional_querystring=optional_qs_params.keys(),
+                              path=path_params.keys()
+                              )(identity_handler)
+
+    response = handler(event, None)
+    assert response.get('statusCode') == 400
+    assert 'Invalid' in response.get('body')
 
 
 @pytest.mark.unit
 def test_body():
     body = {'a': 1, 'b': 2, 'c': 3}
     event = {'body': json.dumps(body)}
-    handler = decs.body(*body.keys())(identity_handler)
+    handler = decs.body(required=body.keys())(identity_handler)
 
     response = handler(event, None)
     kwargs_body = utils.deep_get(response, 'body', 'kwargs', 'body')
@@ -197,11 +264,22 @@ def test_body():
 def test_body_missing_required_key():
     body = {'a': 1, 'b': 2, 'c': 3}
     event = {'body': json.dumps({k: body[k] for k in ['a', 'b']})}
-    handler = decs.body(*body.keys())(identity_handler)
+    handler = decs.body(required=body.keys())(identity_handler)
 
     response = handler(event, None)
     assert response.get('statusCode') == 400
     assert 'missing required key' in response.get('body')
+
+
+@pytest.mark.unit
+def test_body_missing_optional_key():
+    body = {'a': 1, 'b': 2, 'c': 3}
+    event = {'body': json.dumps({k: body[k] for k in ['a', 'b']})}
+    handler = decs.body(optional=body.keys())(identity_handler)
+
+    response = handler(event, None)
+    kwargs_body = utils.deep_get(response, 'body', 'kwargs', 'body')
+    assert all([k in kwargs_body for k in body])
 
 
 @pytest.mark.unit
@@ -226,7 +304,8 @@ def test_sub_aware():
     handler = decs.sub_aware(identity_handler)
 
     response = handler(event, None)
-    assert utils.deep_get(response, 'body', 'kwargs', 'sub') == utils.deep_get(event, 'requestContext', 'authorizer', 'sub')
+    assert utils.deep_get(response, 'body', 'kwargs', 'sub') == utils.deep_get(
+        event, 'requestContext', 'authorizer', 'sub')
 
 
 @pytest.mark.unit
@@ -381,14 +460,15 @@ def test_no_scopes_in_context():
     assert 'missing' in response['body']
 
 
+@pytest.mark.unit
 def test_http_cors_composition(context):
 
     @decs.allow_origin_response('.*')
-    @decs.http_response
+    @decs.http_response()
     def cors_first(e, c, **ks):
         return {}
 
-    @decs.http_response
+    @decs.http_response()
     @decs.allow_origin_response('.*')
     def http_first(e, c, **ks):
         return {}

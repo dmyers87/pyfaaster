@@ -18,28 +18,28 @@ import pyfaaster.aws.utils as utils
 logger = tools.setup_logging('pyfaaster')
 
 
-def environ_aware(reqs, opts):
+def environ_aware(required=None, optional=None, **kwargs):
     """ Decorator that will add each environment variable in reqs and opts
     to the handler kwargs. The variables in reqs will be checked for existence
     and return immediately if the environmental variable is missing.
 
     Args:
-        reqs (list): list of required environment vars
-        opts (list): list of optional environment vars
+        required (iterable): required environment vars
+        optional (iterable): optional environment vars
 
     Returns:
         handler (func): a lambda handler function that is environ aware
     """
     def environ_handler(handler):
         def handler_wrapper(event, context, **kwargs):
-            for r in reqs:
+            for r in required if required else {}:
                 value = os.environ.get(r)
                 if not value:
                     logger.error(f'{r} environment variable missing.')
                     return {'statusCode': 500, 'body': f'Invalid {r}.'}
                 kwargs[r] = value
 
-            for o in opts if opts else []:
+            for o in optional if optional else {}:
                 kwargs[o] = os.environ.get(o)
 
             return handler(event, context, **kwargs)
@@ -98,7 +98,8 @@ def allow_origin_response(*origins):
             response = handler(event, context, **kwargs)
 
             if not isinstance(response, dict):
-                raise Exception(f'Unsupported response type {type(response)}; response must be dict for *_response decorators.')
+                raise Exception(
+                    f'Unsupported response type {type(response)}; response must be dict for *_response decorators.')
 
             # add origin to response headers
             current_headers = response.get('headers', {})
@@ -112,23 +113,35 @@ def allow_origin_response(*origins):
     return allow_origin_handler
 
 
-def parameters(*params):
-    """ Decorator that will check and add queryStringParameters to the event kwargs.
+def parameters(required_querystring=None, optional_querystring=None, path=None):
+    """ Decorator that will check and add queryStringParameters
+        and pathParameters to the event kwargs.
 
     Args:
-        params (List): List of required queryStringParameters
+        required_querystring (iterable): Required queryStringParameters
+        optional_querystring (iterable): Optional queryStringParameters
+        path (iterable): pathParameters (these are always required)
 
     Returns:
         handler (func): a lambda handler function that is namespace aware
     """
     def parameters_handler(handler):
         def handler_wrapper(event, context, **kwargs):
-            for param in params:
+            for param in required_querystring if required_querystring else {}:
                 value = utils.deep_get(event, 'queryStringParameters', param)
                 if not value:
                     logger.error(f'queryStringParameter [{param}] missing from event [{event}].')
                     return {'statusCode': 400, 'body': f'Invalid {param}.'}
-
+                kwargs[param] = value
+            for param in optional_querystring if optional_querystring else {}:
+                value = utils.deep_get(event, 'queryStringParameters', param)
+                if value:
+                    kwargs[param] = value
+            for param in path if path else {}:
+                value = utils.deep_get(event, 'pathParameters', param)
+                if not value:
+                    logger.error(f'pathParameter [{param}] missing from event [{event}].')
+                    return {'statusCode': 400, 'body': f'Invalid {param}.'}
                 kwargs[param] = value
             return handler(event, context, **kwargs)
 
@@ -137,30 +150,35 @@ def parameters(*params):
     return parameters_handler
 
 
-def body(*keys):
+def body(required=None, optional=None):
     """ Decorator that will check that event.get('body') has keys, then add a map of selected keys
     to kwargs.
 
     Args:
-        keys (List): List of required event.body keys
+        required (iterable): Required body keys
+        optional (iterable): Optional body keys
 
     Returns:
         handler (func): a lambda handler function that is namespace aware
     """
     def body_handler(handler):
         def handler_wrapper(event, context, **kwargs):
-            event_body = {}
             try:
                 event_body = json.loads(event.get('body'))
             except json.JSONDecodeError as err:
                 return {'statusCode': 400, 'body': 'Invalid event.body: cannot decode json.'}
 
-            handler_body = {k: event_body.get(k) for k in keys}
-            if not all((v is not None for v in handler_body.values())):
-                logger.error(f'There is a required key [{keys}] missing from event.body [{event_body}].')
+            body_required = {k: event_body.get(k) for k in (required if required else {})}
+            if not all((v is not None for v in body_required.values())):
+                logger.error(f'There is a required key in [{required}] missing from event.body [{event_body}].')
                 return {'statusCode': 400, 'body': 'Invalid event.body: missing required key.'}
 
+            body_optional = {k: event_body.get(k) for k in (optional if optional else {})}
+
+            handler_body = {}
+            handler_body.update(**body_required, **body_optional)
             kwargs['body'] = handler_body
+
             return handler(event, context, **kwargs)
 
         return handler_wrapper
@@ -229,7 +247,7 @@ def http_response(default_error_message=None):
         handler (func): a handler function with the signature (event, context) -> result
 
     Returns:
-        handler (func): a lambda handler function that whose result is HTTPateway compatible.
+        handler (func): a lambda handler function that whose result is HTTPGateway compatible.
     """
     def http_response_handler(handler):
         def handler_wrapper(event, context, **kwargs):
@@ -347,7 +365,8 @@ def configuration_aware(config_file, create=False):
 
         conn = conf.conn(encrypt_key_arn)
         try:
-            settings = conf.load_or_create(conn, config_bucket, config_file) if create else conf.load(conn, config_bucket, config_file)
+            settings = conf.load_or_create(conn, config_bucket, config_file) if create else conf.load(
+                conn, config_bucket, config_file)
         except Exception as err:
             logger.exception(err)
             logger.error('Failed to load or create configuration.')
@@ -434,7 +453,6 @@ def default(default_error_message=None):
         @configuration_aware('configuration.json', True)
         @environ_aware(['NAMESPACE', 'CONFIG'], ['ENCRYPT_KEY_ARN'])
         @pingable
-        @pausable
         def handler_wrapper(event, context, **kwargs):
             try:
                 return handler(event, context, **kwargs)
