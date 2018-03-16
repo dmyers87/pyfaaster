@@ -207,8 +207,16 @@ def sagas(saga=None, transition=None):
             state = faaster_saga.init(NAMESPACE, saga)
             logger.info(f'Saga state: {state}')
 
-            kwargs['state'] = state
-            return handler(event, context, **kwargs)
+            current_state = state['current_state']
+            next_state = utils.deep_get(saga, 'states', current_state, transition)
+            if next_state:
+                kwargs['state'] = state
+                result = handler(event, context, **kwargs)
+                faaster_saga.transition(NAMESPACE, saga, transition, next_state)
+                return result
+            else:
+                logger.info(f'Not in correct state, skipping {transition}')
+                return None
 
         return handler_wrapper
 

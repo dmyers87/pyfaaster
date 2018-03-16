@@ -13,6 +13,7 @@ NAME = 'sagas'
 
 
 def init(namespace, saga):
+    logger.info(f'Initializing saga')
     table = dyn.table(namespace, NAME)
     saga_key = utils.select_keys(saga, 'name')
     item = table.get_item(Key=saga_key).get('Item')
@@ -23,3 +24,18 @@ def init(namespace, saga):
         dyn.record_history(table, saga_key, 'init')
         return initial_item
     return item
+
+
+def transition(namespace, saga, transition, next_state):
+    logger.info(f'Transitioning {transition} to {next_state}')
+    table = dyn.table(namespace, NAME)
+    saga_key = utils.select_keys(saga, 'name')
+    item = table.update_item(
+        Key=saga_key,
+        UpdateExpression='SET current_state = :next_state',
+        ExpressionAttributeValues={
+            ':next_state': next_state,
+        },
+        ReturnValues='ALL_NEW',
+    )
+    return dyn.record_history(table, saga_key, transition)
