@@ -11,6 +11,7 @@ import simplejson as json
 import pyfaaster.aws.configuration as conf
 from pyfaaster.aws.exceptions import HTTPResponseException
 import pyfaaster.aws.publish as publish
+import pyfaaster.aws.saga as faaster_saga
 import pyfaaster.aws.tools as tools
 import pyfaaster.aws.utils as utils
 
@@ -184,6 +185,34 @@ def body(required=None, optional=None):
         return handler_wrapper
 
     return body_handler
+
+
+def sagas(saga=None, transition=None):
+    """ Decorator that will check that event.get('body') has keys, then add a map of selected keys
+    to kwargs.
+
+    Args:
+        saga (dict): saga dictionary
+        transition (str): transition name
+
+    Returns:
+        handler (func): a lambda handler function that is namespace aware
+    """
+    if not all([saga, transition]):
+        raise ValueError('Must supply saga AND transition.')
+
+    def saga_handler(handler):
+        @namespace_aware
+        def handler_wrapper(event, context, NAMESPACE, **kwargs):
+            state = faaster_saga.init(NAMESPACE, saga)
+            logger.info(f'Saga state: {state}')
+
+            kwargs['state'] = state
+            return handler(event, context, **kwargs)
+
+        return handler_wrapper
+
+    return saga_handler
 
 
 def scopes(*scopeList):
@@ -427,7 +456,7 @@ def client_config_aware(handler):
     """
     def handler_wrapper(event, context, **kwargs):
         client_details = tools.get_client_details(event)
-        logger.info(f"{handler.__name__} | {client_details}")
+        logger.info(f"client_config_details | {client_details}")
         logger.debug(f'aws_lambda_wrapper| {event}')
         kwargs['client_details'] = client_details
         return handler(event, context, **kwargs)
@@ -480,9 +509,8 @@ def default(default_error_message=None):
 
         @http_response(default_error_message)
         @account_id_aware
-        @client_config_aware
         @configuration_aware('configuration.json', True)
-        @environ_aware(['NAMESPACE', 'CONFIG'], ['ENCRYPT_KEY_ARN'])
+        @environ_aware(required=['NAMESPACE', 'CONFIG'], optional=['ENCRYPT_KEY_ARN'])
         @pingable
         def handler_wrapper(event, context, **kwargs):
             try:

@@ -40,3 +40,39 @@ def deep_get(dictionary, *keys, ignore_case=False):
         return working_dict.get(search_key)
 
     return functools.reduce(reducer, keys, dictionary)
+
+
+def select_keys(dictionary, *keys):
+    """
+    Safely get a 'subset' of a dictionary. Ignore `keys` that don't exist in dictionary.
+
+    E.g.,
+    >>> import core.common.utils as utils
+    >>> d = {'a': 1, 'b': 2, 'c': 3}
+    >>> utils.select_keys(d, 'a')
+    {'a': 1}
+    >>> utils.select_keys(d, 'a', 'b')
+    {'b': 2, 'a': 1}
+    >>> utils.select_keys(d, 'a', 'unknown_key')
+    {'a': 1}
+    >>> utils.select_keys({})
+    {}
+    >>> utils.select_keys({'a': 1})
+    {}
+
+    Args:
+        dictionary (dict): dictionary to get
+        keys (*args): list of keys
+
+    Returns:
+        dictionary (dict): dictionary subset with just the given `keys` and their values
+    """
+    try:
+        # We can handle different inputs as long as they are dict-like
+        dictionary.items()
+        dictionary.get('')
+    except AttributeError:
+        return None
+
+    return {k: dictionary[k]
+            for k in dictionary.keys() & set(keys)}

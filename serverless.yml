@@ -26,12 +26,14 @@ provider:
   profile: ${opt:aws-profile, env:AWS_PROFILE, env:AWS_DEFAULT_PROFILE, self:custom.defaultProfile}
   runtime: python3.6
   timeout: 300
+  apiKeys:
+    - ${self:custom.prefix}-api-key
 
   environment:
     PYTHONPATH: "/var/runtime:/var/task/vendored"
     NAMESPACE: ${self:provider.stage}
-    LOG_LEVEL: INFO
-    CONFIG: <config-bucket-name>
+    LOG_LEVEL: DEBUG
+    CONFIG: ${self:custom.prefix}
 
   iamRoleStatements:
   - Effect: Allow
@@ -45,6 +47,10 @@ provider:
   - Effect: "Allow"
     Action:
       - "s3:*"
+    Resource: "*"
+  - Effect: "Allow"
+    Action:
+      - "dynamodb:*"
     Resource: "*"
 
 
@@ -67,3 +73,29 @@ functions:
       - http:
           path: hello
           method: get
+          private: true
+  ExampleFaasterSaga1:
+    name: ${self:custom.prefix}-faaster-transition-1
+    handler: example_handlers.transition1
+    events:
+      - http:
+          path: saga/1
+          method: post
+          private: true
+
+resources:
+  Resources:
+    # DynamoDB START
+    EmailDomains:
+      Type: 'AWS::DynamoDB::Table'
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: name
+            AttributeType: S
+        KeySchema:
+          - AttributeName: name
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        TableName: ${self:custom.prefix}-sagas
