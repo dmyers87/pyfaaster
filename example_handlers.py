@@ -17,27 +17,23 @@ def hello_world(event, context, **kwargs):
 saga = {
     'name': 'example-saga',
     'states': {
-        None: {'init': 'state1'},
-        'state1': {'transition1': 'state2'},
-        'state2': {'transition2': 'state3',
-                   'transition3': 'state4'},
+        None:                       {'init':     'unknown'},
+        'unknown':                  {'register': 'waiting_for_invite',
+                                     'invite':   'waiting_for_registration',},
+        'waiting_for_invite':       {'invite':   'member'},
+        'waiting_for_registration': {'register': 'member'},
+        'member': None
     },
 }
 
 
-@faaster.sagas(saga=saga, transition='transition1')
-def transition1(event, context, state, **kwargs):
+@faaster.sagas(saga=saga, transition='register')
+def register(event, context, state, **kwargs):
     print(f'Saga - current_state: {state}')
-    print(f'Running transition1')
+    print(f'Registering')
 
 
-@faaster.sagas(saga=saga, transition='transition2')
-def transition2(event, context, state, **kwargs):
+@faaster.sagas(saga=saga, transition='invite')
+def invite(event, context, state, **kwargs):
     print(f'Saga - current_state: {state}')
-    print(f'Running transition2')
-
-
-@faaster.sagas(saga=saga, transition='transition3')
-def transition3(event, context, state, **kwargs):
-    print(f'Saga - current_state: {state}')
-    print(f'Running transition3')
+    print(f'Inviting')

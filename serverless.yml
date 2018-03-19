@@ -74,14 +74,12 @@ functions:
           path: hello
           method: get
           private: true
-  ExampleFaasterSaga1:
-    name: ${self:custom.prefix}-faaster-transition-1
-    handler: example_handlers.transition1
-    events:
-      - http:
-          path: saga/1
-          method: post
-          private: true
+  ExampleFaasterSagaRegister:
+    name: ${self:custom.prefix}-faaster-sagas-register
+    handler: example_handlers.register
+  ExampleFaasterSagaInvite:
+    name: ${self:custom.prefix}-faaster-sagas-invite
+    handler: example_handlers.invite
 
 resources:
   Resources:

@@ -39,3 +39,10 @@ def transition(namespace, saga, transition, next_state):
         ReturnValues='ALL_NEW',
     )
     return dyn.record_history(table, saga_key, transition)
+
+
+def skip(namespace, saga, transition):
+    logger.info(f'Skipping {transition}')
+    table = dyn.table(namespace, NAME)
+    saga_key = utils.select_keys(saga, 'name')
+    return dyn.record_history(table, saga_key, transition)
