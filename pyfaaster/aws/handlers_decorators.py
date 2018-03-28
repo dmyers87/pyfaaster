@@ -389,6 +389,12 @@ def configuration_aware(config_file, create=False):
     environment variable and S3 Bucket Key (path) specified by config_file. If create=True, this
     decorator will create an empty configuration file instead of erring.
 
+    NOTE: Decorating a lambda with this incurs a performance penalty - S3 is checked on every call.
+          This makes sense when writing a lambda function that updates config and is called infrequently,
+          but makes far less sense if all one needs to do is read config data.
+    TODO: We need a more clear, refined pattern for dealing with uncached writes and cached reads.
+          The way the current config features are written, it's not clear how best to use them.
+
     Args:
         config_file (str): key in the 'CONFIG' S3 bucket of expected configuration file
         create (Bool): optionally create configuration file if absent
@@ -397,24 +403,23 @@ def configuration_aware(config_file, create=False):
         handler (func): a configuration aware lambda handler
     """
     def configuration_handler(handler):
-        config_bucket = os.environ['CONFIG']
-        encrypt_key_arn = os.environ.get('ENCRYPT_KEY_ARN')
-
-        conn = conf.conn(encrypt_key_arn)
-        try:
-            settings = conf.load_or_create(conn, config_bucket, config_file) if create else conf.load(
-                conn, config_bucket, config_file)
-        except Exception as err:
-            logger.exception(err)
-            logger.error('Failed to load or create configuration.')
-            return {'statusCode': 503, 'body': 'Failed to load configuration.'}
-
-        configuration = {
-            'load': lambda: settings or {},
-            'save': functools.partial(conf.save, conn, config_bucket, config_file),
-        }
-
         def handler_wrapper(event, context, **kwargs):
+            config_bucket = os.environ['CONFIG']
+            encrypt_key_arn = os.environ.get('ENCRYPT_KEY_ARN')
+
+            conn = conf.conn(encrypt_key_arn)
+            try:
+                settings = conf.load_or_create(conn, config_bucket, config_file) if create else conf.load(
+                    conn, config_bucket, config_file)
+            except Exception as err:
+                logger.exception(err)
+                logger.error('Failed to load or create configuration.')
+                return {'statusCode': 503, 'body': 'Failed to load configuration.'}
+
+            configuration = {
+                'load': lambda: settings or {},
+                'save': functools.partial(conf.save, conn, config_bucket, config_file),
+            }
             return handler(event, context, configuration=configuration, **kwargs)
 
         return handler_wrapper
