@@ -165,7 +165,7 @@ def body(required=None, optional=None):
         def handler_wrapper(event, context, **kwargs):
             try:
                 event_body = json.loads(event.get('body'))
-            except json.JSONDecodeError as err:
+            except json.JSONDecodeError:
                 return {'statusCode': 400, 'body': 'Invalid event.body: cannot decode json.'}
 
             body_required = {k: event_body.get(k) for k in (required if required else {})}
@@ -373,7 +373,7 @@ def subscriber(required_topics=None):
             try:
                 message_body = json.loads(sns.get('Message'))
             except Exception as err:
-                raise Exception('Could not decode message.')
+                raise Exception(f'Could not decode message. ({err})')
 
             kwargs['message'] = message_body
 
@@ -511,7 +511,7 @@ def default(default_error_message=None):
         @http_response(default_error_message)
         @account_id_aware
         @client_config_aware
-        @configuration_aware('configuration.json', True)
+        @configuration_aware('configuration.json', create=True)
         @environ_aware(['NAMESPACE', 'CONFIG'], ['ENCRYPT_KEY_ARN'])
         @pingable
         def handler_wrapper(event, context, **kwargs):

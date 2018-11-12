@@ -1,0 +1,17 @@
+version: v1.0
+name: PyFaaSter
+agent:
+  machine:
+    type: e1-standard-2
+    os_image: ubuntu1804
+
+blocks:
+  - name: "tests"
+    task:
+      jobs:
+      - name: All Tests
+        commands:
+          - sudo apt install python3-pip tox -y
+          - checkout
+          - pip3 install -r requirements-dev.txt
+          - make test
