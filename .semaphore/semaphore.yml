@@ -18,14 +18,15 @@ blocks:
             - cache store dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt) /home/semaphore/.pyenv/3.7
   - name: Run Tests
     task:
+      prologue:
+        commands:
+          - sem-version python 3.7
+          - checkout
+          - cache restore dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt),requirements
       jobs:
-      - name: Check Version
-        commands:
-          - sem-version python 3.7
-          - cache restore dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt),requirements
-          - make check-version
-      - name: Python Tests
-        commands:
-          - sem-version python 3.7
-          - cache restore dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt),requirements
-          - make test
+        - name: Check Version
+          commands:
+            - make check-version
+        - name: Python Tests
+          commands:
+            - make test
