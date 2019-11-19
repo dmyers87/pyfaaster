@@ -113,7 +113,7 @@ def allow_origin_response(*origins):
     return allow_origin_handler
 
 
-def parameters(required_querystring=None, optional_querystring=None, path=None):
+def parameters(required_querystring=None, optional_querystring=None, path=None, error=None):
     """ Decorator that will check and add queryStringParameters
         and pathParameters to the event kwargs.
 
@@ -131,7 +131,7 @@ def parameters(required_querystring=None, optional_querystring=None, path=None):
                 value = utils.deep_get(event, 'queryStringParameters', param)
                 if not value:
                     logger.error(f'queryStringParameter [{param}] missing from event [{event}].')
-                    return {'statusCode': 400, 'body': f'Invalid {param}.'}
+                    return {'statusCode': 400, 'body': error or f'Invalid {param}.'}
                 kwargs[param] = value
             for param in optional_querystring if optional_querystring else {}:
                 value = utils.deep_get(event, 'queryStringParameters', param)
@@ -141,7 +141,7 @@ def parameters(required_querystring=None, optional_querystring=None, path=None):
                 value = utils.deep_get(event, 'pathParameters', param)
                 if not value:
                     logger.error(f'pathParameter [{param}] missing from event [{event}].')
-                    return {'statusCode': 400, 'body': f'Invalid {param}.'}
+                    return {'statusCode': 400, 'body': error or f'Invalid {param}.'}
                 kwargs[param] = value
             return handler(event, context, **kwargs)
 
@@ -150,7 +150,7 @@ def parameters(required_querystring=None, optional_querystring=None, path=None):
     return parameters_handler
 
 
-def body(required=None, optional=None):
+def body(required=None, optional=None, error=None):
     """ Decorator that will check that event.get('body') has keys, then add a map of selected keys
     to kwargs.
 
@@ -166,12 +166,12 @@ def body(required=None, optional=None):
             try:
                 event_body = json.loads(event.get('body'))
             except json.JSONDecodeError:
-                return {'statusCode': 400, 'body': 'Invalid event.body: cannot decode json.'}
+                return {'statusCode': 400, 'body': error or 'Invalid event.body: cannot decode json.'}
 
             body_required = {k: event_body.get(k) for k in (required if required else {})}
             if not all((v is not None for v in body_required.values())):
                 logger.error(f'There is a required key in [{required}] missing from event.body [{event_body}].')
-                return {'statusCode': 400, 'body': 'Invalid event.body: missing required key.'}
+                return {'statusCode': 400, 'body': error or 'Invalid event.body: missing required key.'}
 
             body_optional = {k: event_body.get(k) for k in (optional if optional else {})}
 
