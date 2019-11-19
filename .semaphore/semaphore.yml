@@ -6,12 +6,26 @@ agent:
     os_image: ubuntu1804
 
 blocks:
-  - name: "tests"
+  - name: Install dependencies
     task:
       jobs:
-      - name: All Tests
+        - name: pip
+          commands:
+            - sem-version python 3.7
+            - checkout
+            - cache restore dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt),requirements
+            - make init
+            - cache store dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt) /home/semaphore/.pyenv/3.7
+  - name: Run Tests
+    task:
+      jobs:
+      - name: Check Version
         commands:
-          - sudo apt install python3-pip tox -y
-          - checkout
-          - pip3 install -r requirements-dev.txt
+          - sem-version python 3.7
+          - cache restore dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt),requirements
+          - make check-version
+      - name: Python Tests
+        commands:
+          - sem-version python 3.7
+          - cache restore dev-requirements-$SEMAPHORE_GIT_BRANCH-$(checksum requirements-dev.txt),requirements
           - make test
