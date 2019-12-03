@@ -22,7 +22,7 @@ class LambdaInvokeException(Exception):
         self.inner_error = boto_error
 
 
-def lambda_invoke(namespace, base_func_name, func_prefix='', payload=bytes(), run_async=False):
+def lambda_invoke(namespace, base_func_name, func_prefix='', payload=bytes(), run_async=False, lambda_client=boto3.client('lambda')):
     """
     Invoke a lambda function
 
@@ -33,12 +33,13 @@ def lambda_invoke(namespace, base_func_name, func_prefix='', payload=bytes(), ru
         payload: The payload to send to the lambda function.  Default is an empty set of bytes.
         run_async (bool): If true, invoke the lambda in a non-blocking fire-and-forget manner.  If false, the
                           caller will wait for a response before continuing.
+        lambda_client: User-provided client for invoking lambda functions in other accounts, defaults to client
+                       for current account.
 
     Returns:
         The response from the lambda.  When using async mode, a response will be available, but it will
         never contain any output - just success/failure of delivery.
     """
-    lambda_client = boto3.client('lambda')
 
     template = '{pref}-{namespace}-{name}'
     full_name = template.format(pref=func_prefix, namespace=namespace, name=base_func_name)

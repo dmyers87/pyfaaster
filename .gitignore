@@ -153,3 +153,6 @@ typings/
 
 # dotenv environment variables file
 .env
+
+# text editor
+*.swp
