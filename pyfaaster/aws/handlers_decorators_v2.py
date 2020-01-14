@@ -18,33 +18,33 @@ import pyfaaster.common.utils as utils
 logger = tools.setup_logging('pyfaaster')
 
 
-def environ_aware(required=None, optional=None, **kwargs):
+def environ_aware(required=None, optional=None):
     """ Decorator that will add each environment variable in reqs and opts
-    to the handler kwargs. The variables in reqs will be checked for existence
-    and return immediately if the environmental variable is missing.
+    to kwargs. The variables in reqs will be checked for existence
+    and throw if the environmental variable is missing.
 
     Args:
         required (iterable): required environment vars
         optional (iterable): optional environment vars
 
     Returns:
-        handler (func): a lambda handler function that is environ aware
+        function (func): a function that is environ aware
     """
+
     def environ_handler(handler):
-        def handler_wrapper(event, context, **kwargs):
-            for r in required if required else {}:
+        def function_wrapper(*args, **kwargs):
+            for r in required if required else []:
                 value = os.environ.get(r)
                 if not value:
-                    logger.error(f'{r} environment variable missing.')
-                    return {'statusCode': 500, 'body': f'Invalid {r}.'}
+                    raise HTTPResponseException(f'{r} environment variable missing.')
                 kwargs[r] = value
 
-            for o in optional if optional else {}:
+            for o in optional if optional else []:
                 kwargs[o] = os.environ.get(o)
 
-            return handler(event, context, **kwargs)
+            return handler(*args, **kwargs)
 
-        return handler_wrapper
+        return function_wrapper
 
     return environ_handler
 
@@ -65,7 +65,7 @@ def domain_aware(handler):
         domain = utils.deep_get(event, 'requestContext', 'authorizer', 'domain')
         if not domain:
             logger.error('Domain requestContext variable missing.')
-            return {'statusCode': 500, 'body': 'Invalid domain.'}
+            raise HTTPResponseException('Invalid domain.')
 
         kwargs['domain'] = domain
         return handler(event, context, **kwargs)
@@ -91,7 +91,7 @@ def allow_origin_response(*origins):
             request_origin = utils.deep_get(event, 'headers', 'origin', ignore_case=True)
             if not any(re.match(o, str(request_origin)) for o in origins):
                 logger.warning(f'Invalid request origin: {request_origin}')
-                return {'statusCode': 403, 'body': 'Unknown origin.'}
+                raise HTTPResponseException('Unknown origin.', statusCode=403)
 
             # call handler
             kwargs['request_origin'] = request_origin
@@ -131,7 +131,7 @@ def parameters(required_querystring=None, optional_querystring=None, path=None, 
                 value = utils.deep_get(event, 'queryStringParameters', param)
                 if not value:
                     logger.error(f'queryStringParameter [{param}] missing from event [{event}].')
-                    return {'statusCode': 400, 'body': error or f'Invalid {param}.'}
+                    raise HTTPResponseException(error or f'Invalid {param}.', statusCode=400)
                 kwargs[param] = value
             for param in optional_querystring if optional_querystring else {}:
                 value = utils.deep_get(event, 'queryStringParameters', param)
@@ -141,7 +141,7 @@ def parameters(required_querystring=None, optional_querystring=None, path=None, 
                 value = utils.deep_get(event, 'pathParameters', param)
                 if not value:
                     logger.error(f'pathParameter [{param}] missing from event [{event}].')
-                    return {'statusCode': 400, 'body': error or f'Invalid {param}.'}
+                    raise HTTPResponseException(error or f'Invalid {param}.', statusCode=400)
                 kwargs[param] = value
             return handler(event, context, **kwargs)
 
@@ -166,12 +166,12 @@ def body(required=None, optional=None, error=None):
             try:
                 event_body = json.loads(event.get('body'))
             except json.JSONDecodeError:
-                return {'statusCode': 400, 'body': error or 'Invalid event.body: cannot decode json.'}
+                raise HTTPResponseException(error or 'Invalid event.body: cannot decode json.', statusCode=400)
 
             body_required = {k: event_body.get(k) for k in (required if required else {})}
             if not all((v is not None for v in body_required.values())):
                 logger.error(f'There is a required key in [{required}] missing from event.body [{event_body}].')
-                return {'statusCode': 400, 'body': error or 'Invalid event.body: missing required key.'}
+                raise HTTPResponseException(error or 'Invalid event.body: missing required key.', statusCode=400)
 
             body_optional = {k: event_body.get(k) for k in (optional if optional else {})}
 
@@ -209,11 +209,11 @@ def scopes(*scope_list):
             token_scopes = utils.deep_get(event, 'requestContext', 'authorizer', 'scopes')
 
             if not token_scopes:
-                return {'statusCode': 500, 'body': 'Invalid token scopes: missing!'}
+                raise HTTPResponseException('Invalid token scopes: missing!')
 
             if not all((s in token_scopes for s in string_scope_list)):
                 logger.warning(f'There is a required scope [{scope_list}] missing from token scopes [{token_scopes}].')
-                return {'statusCode': 403, 'body': 'access_token has insufficient access.'}
+                raise HTTPResponseException('access_token has insufficient access.', statusCode=403)
 
             return handler(event, context, **kwargs)
 
@@ -235,7 +235,7 @@ def sub_aware(handler):
         sub = utils.deep_get(event, 'requestContext', 'authorizer', 'sub')
         if not sub:
             logger.error('Sub requestContext variable missing.')
-            return {'statusCode': 500, 'body': 'Invalid sub.'}
+            raise HTTPResponseException('Invalid sub.')
 
         kwargs['sub'] = sub
         return handler(event, context, **kwargs)
@@ -297,7 +297,7 @@ def pausable(handler):
     def handler_wrapper(event, context, **kwargs):
         if kwargs.get('PAUSE'):
             logger.warning('Function paused')
-            return {'statusCode': 503, 'body': 'info: paused'}
+            raise HTTPResponseException('info: paused', statusCode=503)
         return handler(event, context, **kwargs)
     return handler_wrapper
 
@@ -414,7 +414,7 @@ def configuration_aware(config_file, create=False):
             except Exception as err:
                 logger.exception(err)
                 logger.error('Failed to load or create configuration.')
-                return {'statusCode': 503, 'body': 'Failed to load configuration.'}
+                raise HTTPResponseException('Failed to load configuration.', statusCode=503)
 
             configuration = {
                 'load': lambda: settings or {},
@@ -520,7 +520,7 @@ def default(default_error_message=None):
             except Exception as err:
                 logger.error('Lambda Event : {}'.format(event))
                 logger.exception('{}:{}'.format(type(err), err))
-                return {'statusCode': 500, 'body': f'Could not complete {handler.__name__}'}
+                raise HTTPResponseException(f'Could not complete {handler.__name__}')
 
         return handler_wrapper
 

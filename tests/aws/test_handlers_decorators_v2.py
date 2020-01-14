@@ -7,7 +7,7 @@ import pytest
 import simplejson as json
 
 from pyfaaster.aws.exceptions import HTTPResponseException
-import pyfaaster.aws.handlers_decorators as decs
+import pyfaaster.aws.handlers_decorators_v2 as decs
 import pyfaaster.common.utils as utils
 
 _CONFIG_BUCKET = 'example_config_bucket'
@@ -88,8 +88,10 @@ def test_domain_aware_none():
     event = {}
     handler = decs.domain_aware(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 500
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 500
 
 
 @pytest.mark.unit
@@ -107,8 +109,10 @@ def test_namespace_aware_none():
     event = {}
     handler = decs.namespace_aware(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 500
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 500
 
 
 @pytest.mark.unit
@@ -155,8 +159,10 @@ def test_cors_origin_bad():
     }
     handler = decs.allow_origin_response(r'.*\.cloudzero\.com')(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 403
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 403
 
 
 @pytest.mark.unit
@@ -197,9 +203,11 @@ def test_parameters_missing_required_querystring():
                               path=path_params.keys()
                               )(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 400
-    assert 'Invalid' in response.get('body')
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 400
+    assert 'Invalid' in excInfo.value.body
 
 
 @pytest.mark.unit
@@ -240,9 +248,11 @@ def test_parameters_missing_path():
                               path=path_params.keys()
                               )(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 400
-    assert 'Invalid' in response.get('body')
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 400
+    assert 'Invalid' in excInfo.value.body
 
 
 @pytest.mark.unit
@@ -262,9 +272,11 @@ def test_body_missing_required_key():
     event = {'body': json.dumps({k: body[k] for k in ['a', 'b']})}
     handler = decs.body(required=body.keys())(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 400
-    assert 'missing required key' in response.get('body')
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 400
+    assert 'missing required key' in excInfo.value.body
 
 
 @pytest.mark.unit
@@ -283,9 +295,11 @@ def test_body_json_decode_exception():
     event = {'body': ''}
     handler = decs.body('no_key')(identity_handler)
 
-    response = handler(event, None)
-    assert response.get('statusCode') == 400
-    assert 'cannot decode json' in response.get('body')
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 400
+    assert 'cannot decode json' in excInfo.value.body
 
 
 @pytest.mark.unit
@@ -314,8 +328,10 @@ def test_sub_aware_none():
     }
     handler = decs.sub_aware(identity_handler)
 
-    response = handler(event, None)
-    assert response['statusCode'] == 500
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 500
 
 
 @pytest.mark.unit
@@ -452,9 +468,11 @@ def test_insufficient_scopes():
     }
     handler = decs.scopes('read', 'write', 'admin')(identity_handler)
 
-    response = handler(event, None)
-    assert response['statusCode'] == 403
-    assert 'insufficient' in response['body']
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 403
+    assert 'insufficient' in excInfo.value.body
 
 
 @pytest.mark.unit
@@ -482,9 +500,11 @@ def test_no_scopes_in_context():
     }
     handler = decs.scopes()(identity_handler)
 
-    response = handler(event, None)
-    assert response['statusCode'] == 500
-    assert 'missing' in response['body']
+    with pytest.raises(HTTPResponseException) as excInfo:
+        handler(event, None)
+
+    assert excInfo.value.statusCode == 500
+    assert 'missing' in excInfo.value.body
 
 
 @pytest.mark.unit
