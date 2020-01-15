@@ -1,0 +1,527 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2016-present, CloudZero, Inc. All rights reserved.
+# Licensed under the BSD-style license. See LICENSE file in the project root for full license information.
+
+import functools
+import re
+import os
+
+import simplejson as json
+
+import pyfaaster.aws.configuration as conf
+from pyfaaster.aws.exceptions import HTTPResponseException
+import pyfaaster.aws.publish as publish
+import pyfaaster.aws.tools as tools
+import pyfaaster.common.utils as utils
+
+
+logger = tools.setup_logging('pyfaaster')
+
+
+def environ_aware(required=None, optional=None):
+    """ Decorator that will add each environment variable in reqs and opts
+    to kwargs. The variables in reqs will be checked for existence
+    and throw if the environmental variable is missing.
+
+    Args:
+        required (iterable): required environment vars
+        optional (iterable): optional environment vars
+
+    Returns:
+        function (func): a function that is environ aware
+    """
+
+    def environ_handler(handler):
+        def function_wrapper(*args, **kwargs):
+            for r in required if required else []:
+                value = os.environ.get(r)
+                if not value:
+                    raise HTTPResponseException(f'{r} environment variable missing.')
+                kwargs[r] = value
+
+            for o in optional if optional else []:
+                kwargs[o] = os.environ.get(o)
+
+            return handler(*args, **kwargs)
+
+        return function_wrapper
+
+    return environ_handler
+
+
+namespace_aware = environ_aware(['NAMESPACE'], [])
+
+
+def domain_aware(handler):
+    """ Decorator that will check and add event.requestContext.authorizer.domain to the event kwargs.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a lambda handler function that is domain aware
+    """
+    def handler_wrapper(event, context, **kwargs):
+        domain = utils.deep_get(event, 'requestContext', 'authorizer', 'domain')
+        if not domain:
+            logger.error('Domain requestContext variable missing.')
+            raise HTTPResponseException('Invalid domain.')
+
+        kwargs['domain'] = domain
+        return handler(event, context, **kwargs)
+
+    return handler_wrapper
+
+
+def allow_origin_response(*origins):
+    """ Decorator that will check that the event.headers.origin is in origins; if the origin
+    is valid, this decorator will add it to the response headers.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a lambda handler function that is authorized
+    """
+    def allow_origin_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            logger.debug(f'Checking origin for event: {event}')
+
+            # Check Origin
+            request_origin = utils.deep_get(event, 'headers', 'origin', ignore_case=True)
+            if not any(re.match(o, str(request_origin)) for o in origins):
+                logger.warning(f'Invalid request origin: {request_origin}')
+                raise HTTPResponseException('Unknown origin.', statusCode=403)
+
+            # call handler
+            kwargs['request_origin'] = request_origin
+            response = handler(event, context, **kwargs)
+
+            if not isinstance(response, dict):
+                raise Exception(
+                    f'Unsupported response type {type(response)}; response must be dict for *_response decorators.')
+
+            # add origin to response headers
+            current_headers = response.get('headers', {})
+            cors_headers = {'Access-Control-Allow-Origin': request_origin,
+                            'Access-Control-Allow-Credentials': 'true'}
+            response['headers'] = {**current_headers, **cors_headers}
+            return response
+
+        return handler_wrapper
+
+    return allow_origin_handler
+
+
+def parameters(required_querystring=None, optional_querystring=None, path=None, error=None):
+    """ Decorator that will check and add queryStringParameters
+        and pathParameters to the event kwargs.
+
+    Args:
+        required_querystring (iterable): Required queryStringParameters
+        optional_querystring (iterable): Optional queryStringParameters
+        path (iterable): pathParameters (these are always required)
+
+    Returns:
+        handler (func): a lambda handler function that is namespace aware
+    """
+    def parameters_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            for param in required_querystring if required_querystring else {}:
+                value = utils.deep_get(event, 'queryStringParameters', param)
+                if not value:
+                    logger.error(f'queryStringParameter [{param}] missing from event [{event}].')
+                    raise HTTPResponseException(error or f'Invalid {param}.', statusCode=400)
+                kwargs[param] = value
+            for param in optional_querystring if optional_querystring else {}:
+                value = utils.deep_get(event, 'queryStringParameters', param)
+                if value:
+                    kwargs[param] = value
+            for param in path if path else {}:
+                value = utils.deep_get(event, 'pathParameters', param)
+                if not value:
+                    logger.error(f'pathParameter [{param}] missing from event [{event}].')
+                    raise HTTPResponseException(error or f'Invalid {param}.', statusCode=400)
+                kwargs[param] = value
+            return handler(event, context, **kwargs)
+
+        return handler_wrapper
+
+    return parameters_handler
+
+
+def body(required=None, optional=None, error=None):
+    """ Decorator that will check that event.get('body') has keys, then add a map of selected keys
+    to kwargs.
+
+    Args:
+        required (iterable): Required body keys
+        optional (iterable): Optional body keys
+
+    Returns:
+        handler (func): a lambda handler function that is namespace aware
+    """
+    def body_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            try:
+                event_body = json.loads(event.get('body'))
+            except json.JSONDecodeError:
+                raise HTTPResponseException(error or 'Invalid event.body: cannot decode json.', statusCode=400)
+
+            body_required = {k: event_body.get(k) for k in (required if required else {})}
+            if not all((v is not None for v in body_required.values())):
+                logger.error(f'There is a required key in [{required}] missing from event.body [{event_body}].')
+                raise HTTPResponseException(error or 'Invalid event.body: missing required key.', statusCode=400)
+
+            body_optional = {k: event_body.get(k) for k in (optional if optional else {})}
+
+            handler_body = {}
+            handler_body.update(**body_required, **body_optional)
+            kwargs['body'] = handler_body
+
+            return handler(event, context, **kwargs)
+
+        return handler_wrapper
+
+    return body_handler
+
+
+def scopes(*scope_list):
+    """ Decorator that will check that event.requestContext.authorizer.scopes has the given
+    scopes. This decorator assumes that you have an upstream authorizer putting the scopes from the
+    access_token into the event.requestContext.authorizer.scopes. This is a reasonable assumption
+    if you are using a custom authorizer, which we are!
+
+    Args:
+        scope_list (List): List of required access_token scopes. Each item must be castable to string.
+
+    Returns:
+        handler (func): a lambda handler function that is namespace aware
+    """
+    try:
+        string_scope_list = [str(s) for s in scope_list]
+    except Exception as err:
+        logger.exception(err)
+        raise TypeError('All scopes must be castable to string.')
+
+    def scopes_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            token_scopes = utils.deep_get(event, 'requestContext', 'authorizer', 'scopes')
+
+            if not token_scopes:
+                raise HTTPResponseException('Invalid token scopes: missing!')
+
+            if not all((s in token_scopes for s in string_scope_list)):
+                logger.warning(f'There is a required scope [{scope_list}] missing from token scopes [{token_scopes}].')
+                raise HTTPResponseException('access_token has insufficient access.', statusCode=403)
+
+            return handler(event, context, **kwargs)
+
+        return handler_wrapper
+
+    return scopes_handler
+
+
+def sub_aware(handler):
+    """ Decorator that will check and add event.requestContext.authorizer.sub to the event kwargs.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a lambda handler function that is sub aware
+    """
+    def handler_wrapper(event, context, **kwargs):
+        sub = utils.deep_get(event, 'requestContext', 'authorizer', 'sub')
+        if not sub:
+            logger.error('Sub requestContext variable missing.')
+            raise HTTPResponseException('Invalid sub.')
+
+        kwargs['sub'] = sub
+        return handler(event, context, **kwargs)
+
+    return handler_wrapper
+
+
+def http_response(default_error_message=None):
+    """ Decorator that will wrap handler response in an API Gateway compatible dict with
+    statusCode and json serialized body. If handler result has a 'body', this decorator
+    will serialize it into the API Gateway body; if the handler result does _not_ have a
+    body, this decorator will return statusCode 200 and serialize the entire result.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a lambda handler function that whose result is HTTPGateway compatible.
+    """
+    def http_response_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            try:
+                res = handler(event, context, **kwargs)
+                if not isinstance(res, dict):
+                    raise Exception(f'Unsupported return type {type(res)}; response must be dict.')
+                return {
+                    'headers': res.get('headers', {}),
+                    'statusCode': res.get('statusCode', 200),
+                    'body': json.dumps(res['body'], iterable_as_array=True) if 'body' in res else None,
+                }
+            except HTTPResponseException as err:
+                return {
+                    'statusCode': err.statusCode,
+                    'body': json.dumps(err.body, iterable_as_array=True),
+                }
+            except Exception as err:
+                logger.exception(err)
+                lambda_function_name = context.function_name.split('.')[-1].replace('_', ' ')
+                return {
+                    'statusCode': 500,
+                    'body': default_error_message or f'Failed to {lambda_function_name}.',
+                }
+
+        return handler_wrapper
+    return http_response_handler
+
+
+def pausable(handler):
+    """ Decorator that will "pause', i.e. short circuit and return immediately before calling
+    the decorated handler, if the PAUSE environment variable is set.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a pausable lambda handler
+    """
+    @environ_aware([], ['PAUSE'])
+    def handler_wrapper(event, context, **kwargs):
+        if kwargs.get('PAUSE'):
+            logger.warning('Function paused')
+            raise HTTPResponseException('info: paused', statusCode=503)
+        return handler(event, context, **kwargs)
+    return handler_wrapper
+
+
+def pingable(handler):
+    """ Decorator that will short circuit and return immediately before calling
+    the decorated handler if the event is a "ping" event.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a pingable lambda handler
+    """
+    def handler_wrapper(event, context, **kwargs):
+        if event.get('detail-type') == 'Scheduled Event' and event.get('source') == 'aws.events':
+            logger.debug('Ping received, keeping function alive')
+            return 'info: ping'
+        return handler(event, context, **kwargs)
+
+    return handler_wrapper
+
+
+def publisher(handler):
+    """ Decorator that will publish messages to SNS Topics. This decorator looks for a 'messages'
+    key in the result of the wrapper decorator. It expects result['messages'] to be a dict where
+    key is Topic Name or ARN and value is the message to be sent. It will publish each message to
+    its respective Topic.
+
+    For example:
+
+    response['messages'] = {
+        'topic-1': 'string message',
+        'topic-2': {'dictionary': 'message'},
+    }
+
+    Args:
+        handler (func): lambda handler whose result will be checked for messages to publish
+
+    Returns:
+        handler (func): a publishing lambda handler
+    """
+
+    @account_id_aware
+    @namespace_aware
+    @region_aware
+    def handler_wrapper(event, context, **kwargs):
+        result = handler(event, context, **kwargs)
+        conn = publish.conn(kwargs['region'], kwargs['account_id'], kwargs['NAMESPACE'])
+        publish.publish(conn, result.get('messages', {}))
+        return result
+
+    return handler_wrapper
+
+
+def subscriber(required_topics=None):
+    """ Decorator that will grab messages from sns location in event body.
+
+    Args:
+        required_topics (iterable): Handler must be triggered by one of these Topics
+
+    Returns:
+        handler (func): a lambda handler function that is namespace aware
+    """
+    def subscriber_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            try:
+                sns = event['Records'][0]['Sns']
+            except Exception:
+                raise Exception('Unsupported event format.')
+            if required_topics and not any((topic_name in sns['TopicArn'] for topic_name in required_topics)):
+                raise Exception('Message received not from expected topic.')
+            try:
+                message_body = json.loads(sns.get('Message'))
+            except Exception as err:
+                raise Exception(f'Could not decode message. ({err})')
+
+            kwargs['message'] = message_body
+
+            return handler(event, context, **kwargs)
+
+        return handler_wrapper
+
+    return subscriber_handler
+
+
+def configuration_aware(config_file, create=False):
+    """ Decorator that expects a configuration file in an S3 Bucket specified by the 'CONFIG'
+    environment variable and S3 Bucket Key (path) specified by config_file. If create=True, this
+    decorator will create an empty configuration file instead of erring.
+
+    NOTE: Decorating a lambda with this incurs a performance penalty - S3 is checked on every call.
+          This makes sense when writing a lambda function that updates config and is called infrequently,
+          but makes far less sense if all one needs to do is read config data.
+    TODO: We need a more clear, refined pattern for dealing with uncached writes and cached reads.
+          The way the current config features are written, it's not clear how best to use them.
+
+    Args:
+        config_file (str): key in the 'CONFIG' S3 bucket of expected configuration file
+        create (Bool): optionally create configuration file if absent
+
+    Returns:
+        handler (func): a configuration aware lambda handler
+    """
+    def configuration_handler(handler):
+        def handler_wrapper(event, context, **kwargs):
+            config_bucket = os.environ['CONFIG']
+            encrypt_key_arn = os.environ.get('ENCRYPT_KEY_ARN')
+
+            conn = conf.conn(encrypt_key_arn)
+            try:
+                settings = conf.load_or_create(conn, config_bucket, config_file) if create else conf.load(
+                    conn, config_bucket, config_file)
+            except Exception as err:
+                logger.exception(err)
+                logger.error('Failed to load or create configuration.')
+                raise HTTPResponseException('Failed to load configuration.', statusCode=503)
+
+            configuration = {
+                'load': lambda: settings or {},
+                'save': functools.partial(conf.save, conn, config_bucket, config_file),
+            }
+            return handler(event, context, configuration=configuration, **kwargs)
+
+        return handler_wrapper
+
+    return configuration_handler
+
+
+def client_config_aware(handler):
+    """ Decorator that will find the Source IP and Client in the event headers.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a client config aware lambda handler
+    """
+    def handler_wrapper(event, context, **kwargs):
+        client_details = tools.get_client_details(event)
+        logger.info(f"{handler.__name__} | {client_details}")
+        logger.debug(f'aws_lambda_wrapper| {event}')
+        kwargs['client_details'] = client_details
+        return handler(event, context, **kwargs)
+    return handler_wrapper
+
+
+def region_aware(handler):
+    """ Decorator that will find the Account Region in the lambda context.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a region aware lambda handler
+    """
+    def handler_wrapper(event, context, **kwargs):
+        region = tools.get_region(context)
+        kwargs['region'] = region
+        return handler(event, context, **kwargs)
+    return handler_wrapper
+
+
+def account_id_aware(handler):
+    """ Decorator that will find the Account ID in the lambda context.
+
+    Args:
+        handler (func): a handler function with the signature (event, context) -> result
+
+    Returns:
+        handler (func): a context aware lambda handler
+    """
+    def handler_wrapper(event, context, **kwargs):
+        account_id = tools.get_account_id(context)
+        kwargs['account_id'] = account_id
+        return handler(event, context, **kwargs)
+    return handler_wrapper
+
+
+def catch_exceptions(handler):
+    """ Decorator that will catch all exceptions. Normally bad practice in pure Python programming, but when running
+    Python in AWS Lambda, by preventing a Python Lambda from throwing an exception you can prevent a cold start
+    the next time the Lambda function is called
+
+    Args:
+        handler (func): an AWS Lambda handler function
+
+    Returns:
+        handler (func): an AWS Lambda handler that will catch any exception that occurs in the decorated function
+    """
+    def handler_wrapper(*args, **kwargs):
+        try:
+            return handler(*args, **kwargs)
+        except Exception as e:
+            logger.exception(f'Exception caught by catch_exceptions decorator: {e}')
+    return handler_wrapper
+
+
+def default(default_error_message=None):
+    """
+    AWS lambda handler handler. A wrapper with standard boilerplate implementing the
+    best practices we've developed
+
+    Returns:
+        The wrapped lambda function or JSON response function when an error occurs.  When called,
+        this wrapped function will return the appropriate output
+    """
+
+    def default_handler(handler):
+
+        @http_response(default_error_message)
+        @account_id_aware
+        @client_config_aware
+        @configuration_aware('configuration.json', create=True)
+        @environ_aware(['NAMESPACE', 'CONFIG'], ['ENCRYPT_KEY_ARN'])
+        @pingable
+        def handler_wrapper(event, context, **kwargs):
+            try:
+                return handler(event, context, **kwargs)
+            except Exception as err:
+                logger.error('Lambda Event : {}'.format(event))
+                logger.exception('{}:{}'.format(type(err), err))
+                raise HTTPResponseException(f'Could not complete {handler.__name__}')
+
+        return handler_wrapper
+
+    return default_handler
