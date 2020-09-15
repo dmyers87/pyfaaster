@@ -55,7 +55,7 @@ init:                                    ## ensures all dev dependencies into th
 
 
 test: check-docker                       ## runs the unit tests on all available python runtimes
-	@tox
+	pytest
 
 
 lint:                                    ## lints the code via adherence to PEP8 standards
@@ -73,8 +73,8 @@ clean-pyc:                               ## rms pyc, pyo, *~, and __pycache__
 	find . -name '__pycache__' -exec rm -fr {} +
 
 
-build: test                              ## builds sdist bdist_wheel
-	./setup.py sdist bdist_wheel --universal
+build: test                              ## builds sdist
+	./setup.py sdist
 
 
 check-version:													 ## check that version pyfaaster/__version__ is not in pypi
@@ -141,7 +141,3 @@ sls: guard-action                        ## run sls with given stage and environ
 			exit 1 ; \
 		fi
 
-
-.PHONY: deploy
-deploy: check-sls vendor                 ## wrap sls deploy
-	@make action=deploy sls
