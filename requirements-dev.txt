@@ -11,9 +11,11 @@ pytest>=6.0.2
 pytest-cov>=2.10.1
 pytest-mock>=3.3.1
 twine>=3.2.0
-setuptools>=50.3.0
-wheel>=0.35.1
+setuptools>=65.5.1
+wheel>=0.38.0
 hypothesis>=5.37.4
 cz-common-python>=0.10.2
 freezegun>=1.0.0
 -r requirements.txt
+certifi>=2023.7.22 # not directly required, pinned by Snyk to avoid a vulnerability
+requests>=2.31.0 # not directly required, pinned by Snyk to avoid a vulnerability
