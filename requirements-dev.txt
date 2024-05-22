@@ -17,3 +17,4 @@ hypothesis>=5.37.4
 cz-common-python>=0.10.2
 freezegun>=1.0.0
 -r requirements.txt
+requests>=2.32.0 # not directly required, pinned by Snyk to avoid a vulnerability
